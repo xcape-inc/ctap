@@ -1,11 +1,11 @@
 [package]
-name = "ctap"
-description = "A Rust implementation of the FIDO2 CTAP protocol"
-version = "0.1.0"
+name = "ctap_hmac"
+description = "A Rust implementation of the FIDO2 CTAP protocol, including the HMAC extension"
+version = "0.1.1"
 license = "Apache-2.0/MIT"
-homepage = "https://github.com/ArdaXi/ctap"
-repository = "https://github.com/ArdaXi/ctap"
-authors = ["Arda Xi <arda@ardaxi.com>"]
+homepage = "https://github.com/ArdaXi/ctap/pull/2"
+repository = "https://github.com/shimunn/ctap"
+authors = ["Arda Xi <arda@ardaxi.com>", "shimun <shimun@shimun.net>"]
 edition = "2018"
 
 [dependencies]
