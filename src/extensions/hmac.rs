@@ -185,16 +185,18 @@ impl HmacExtension for FidoDevice {
             }),
             _ => Err(FidoErrorKind::CborDecode),
         }?;
-        let mut hmac_secret = ([0u8; 32], [0u8; 32]);
+        let mut hmac_secret = [0u8; 64];
         decryptor
             .decrypt(
                 &mut RefReadBuffer::new(&hmac_secret_enc),
-                &mut RefWriteBuffer::new(unsafe {
-                    std::mem::transmute::<_, &mut [u8; 64]>(&mut hmac_secret)
-                }),
+                &mut RefWriteBuffer::new(&mut hmac_secret),
                 true,
             )
-            .expect("failed to decrypt secret");
-        Ok((hmac_secret.0, salt2.map(|_| hmac_secret.1)))
+            .map_err(|_| FidoErrorKind::ReadPacket)?;
+        let mut hmac_secret_0 = [0u8; 32];
+        let mut hmac_secret_1 = [0u8; 32];
+        hmac_secret_0.copy_from_slice(&hmac_secret[0..32]);
+        hmac_secret_1.copy_from_slice(&hmac_secret[32..]);
+        Ok((hmac_secret_0, salt2.map(|_| hmac_secret_1)))
     }
 }
