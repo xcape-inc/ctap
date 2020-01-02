@@ -31,6 +31,7 @@ pub trait HmacExtension {
         "hmac-secret"
     }
 
+    /// Generates data for the extension field as part of the assertion request
     fn get_dict(&mut self, salt: &[u8; 32], salt2: Option<&[u8; 32]>) -> FidoResult<Value> {
         let mut map = BTreeMap::new();
         map.insert(
@@ -40,10 +41,23 @@ pub trait HmacExtension {
         Ok(Value::Map(map))
     }
 
+    /// Wraps [`get_dict`]
     fn get_data(&mut self, salt: &[u8; 32], salt2: Option<&[u8; 32]>) -> FidoResult<Value>;
 
+    /// Convenience function to create an credential with default rp_id and user_name
+    /// Use `FidoDevice::make_credential` if you need more control
     fn make_hmac_credential(&mut self) -> FidoResult<FidoHmacCredential>;
 
+    /// Request an assertion from the authenticator for a given credential and salt(s).
+    /// at least one `salt` must be provided, consider using a hashing function like SHA256
+    /// to ensure that your salt will fit 32 bytes.
+    /// Salt(s), credential and the authenticator internal secret will then be used to
+    /// generate a secret.
+    ///
+    /// This method will return the secret whether the assertion matches the credential
+    /// provided, and will fail if a PIN is required but not provided or if the
+    /// device returns malformed data.
+    ///
     fn get_hmac_assertion(
         &mut self,
         credential: &FidoHmacCredential,
@@ -51,6 +65,8 @@ pub trait HmacExtension {
         salt2: Option<&[u8; 32]>,
     ) -> FidoResult<([u8; 32], Option<[u8; 32]>)>;
 
+    /// Convenience function for `get_hmac_assertion` that will accept arbitrary
+    /// lenght input which will then be hashed and passed on
     fn hmac_challange(
         &mut self,
         credential: &FidoHmacCredential,
