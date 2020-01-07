@@ -5,7 +5,8 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 use cbor_codec::{DecodeError, EncodeError};
-
+use csv_core::{ReadFieldResult, Reader};
+use failure::_core::fmt::{Error, Formatter};
 use failure::{Backtrace, Context, Fail};
 use std::fmt;
 use std::fmt::Display;
@@ -14,6 +15,9 @@ pub type FidoResult<T> = Result<T, FidoError>;
 
 #[derive(Debug)]
 pub struct FidoError(Context<FidoErrorKind>);
+
+#[derive(Debug, Copy, Clone, Fail, Eq, PartialEq)]
+pub struct CborErrorCode(u8);
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Fail)]
 pub enum FidoErrorKind {
@@ -43,8 +47,8 @@ pub enum FidoErrorKind {
     DecryptPin,
     #[fail(display = "Supplied key has incorrect type.")]
     KeyType,
-    #[fail(display = "Device returned error: 0x{:x}", _0)]
-    CborError(u8),
+    #[fail(display = "Device returned error: {}", _0)]
+    CborError(CborErrorCode),
     #[fail(display = "Device does not support FIDO2")]
     DeviceUnsupported,
     #[fail(display = "This operating requires a PIN but none was provided.")]
@@ -97,5 +101,70 @@ impl From<DecodeError> for FidoError {
     #[inline(always)]
     fn from(err: DecodeError) -> FidoError {
         FidoError(err.context(FidoErrorKind::CborDecode))
+    }
+}
+
+impl From<u8> for CborErrorCode {
+    fn from(code: u8) -> Self {
+        Self(code)
+    }
+}
+
+impl Display for CborErrorCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        let messages = include_str!("ctap_error_codes.csv");
+        let mut rdr = Reader::new();
+        let mut bytes = messages.as_bytes();
+        let mut col: usize = 0;
+        let mut row: usize = 0;
+        let mut correct_row: bool = false;
+        let mut field = [0u8; 1024];
+        let hex = format!("{:x?}", self.0);
+        let mut name: Option<String> = None;
+        let mut desc: Option<String> = None;
+        loop {
+            let (result, nin, read) = rdr.read_field(&bytes, &mut field);
+            bytes = &bytes[nin..];
+            match result {
+                ReadFieldResult::InputEmpty => {}
+                ReadFieldResult::OutputFull => panic!("field too large"),
+                ReadFieldResult::Field { record_end } => {
+                    let text = String::from_utf8(field[..read].iter().cloned().collect()).unwrap();
+                    if row > 0 {
+                        match col {
+                            0 if i64::from_str_radix(&text[2..], 16)
+                                .expect("malformed ctap_error_codes.csv")
+                                == self.0 as i64 =>
+                            {
+                                correct_row = true
+                            }
+                            1 | 2 if correct_row => {
+                                if let Some(_) = name {
+                                    desc = Some(text);
+                                    break;
+                                } else {
+                                    name = Some(text);
+                                }
+                            }
+                            _ => (),
+                        }
+                    }
+                    col += 1;
+                    if record_end {
+                        col = 0;
+                        row += 1;
+                    }
+                }
+                ReadFieldResult::End => break,
+            }
+        }
+        if let Some((code, name, desc)) =
+            name.and_then(|name| desc.map(|desc| (self.0, name, desc)))
+        {
+            write!(f, "CborError: 0x{:x?}: {}", code, desc);
+        } else {
+            write!(f, "CborError: 0x{:x?}", self.0);
+        }
+        Ok(())
     }
 }

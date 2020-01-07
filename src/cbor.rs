@@ -82,7 +82,11 @@ impl<'a> MakeCredentialRequest<'a> {
         let mut length = 4;
         length += !self.exclude_list.is_empty() as usize;
         length += !self.extensions.is_empty() as usize;
-        length += self.options.is_some() as usize;
+        length += self
+            .options
+            .as_ref()
+            .map(|opt| opt.encoded())
+            .unwrap_or(false) as usize;
         length += self.pin_auth.is_some() as usize;
         length += self.pin_protocol.is_some() as usize;
         encoder.object(length)?;
@@ -145,7 +149,7 @@ impl MakeCredentialResponse {
     pub fn decode<R: ReadBytesExt>(mut reader: R) -> FidoResult<Self> {
         let status = reader.read_u8().context(FidoErrorKind::CborDecode)?;
         if status != 0 {
-            Err(FidoErrorKind::CborError(status))?
+            Err(FidoErrorKind::CborError(CborErrorCode::from(status)))?
         }
         let mut decoder = Decoder::new(Config::default(), reader);
         let mut response = MakeCredentialResponse::default();
@@ -182,7 +186,11 @@ impl<'a> GetAssertionRequest<'a> {
         let mut length = 2;
         length += !self.allow_list.is_empty() as usize;
         length += !self.extensions.is_empty() as usize;
-        length += self.options.is_some() as usize;
+        length += self
+            .options
+            .as_ref()
+            .map(|opt| opt.encoded())
+            .unwrap_or(false) as usize;
         length += self.pin_auth.is_some() as usize;
         length += self.pin_protocol.is_some() as usize;
         encoder.object(length)?;
@@ -236,7 +244,7 @@ impl GetAssertionResponse {
     pub fn decode<R: ReadBytesExt>(mut reader: R) -> FidoResult<Self> {
         let status = reader.read_u8().context(FidoErrorKind::CborDecode)?;
         if status != 0 {
-            Err(FidoErrorKind::CborError(status))?
+            Err(FidoErrorKind::CborError(CborErrorCode::from(status)))?
         }
         let mut decoder = Decoder::new(Config::default(), reader);
         let mut response = GetAssertionResponse::default();
@@ -272,7 +280,7 @@ impl GetInfoResponse {
     pub fn decode<R: ReadBytesExt>(mut reader: R) -> FidoResult<Self> {
         let status = reader.read_u8().context(FidoErrorKind::CborDecode)?;
         if status != 0 {
-            Err(FidoErrorKind::CborError(status))?
+            Err(FidoErrorKind::CborError(CborErrorCode::from(status)))?
         }
         let mut decoder = Decoder::new(Config::default(), reader);
         let mut response = GetInfoResponse::default();
@@ -360,7 +368,7 @@ impl ClientPinResponse {
     pub fn decode<R: ReadBytesExt>(mut reader: R) -> FidoResult<Self> {
         let status = reader.read_u8().context(FidoErrorKind::CborDecode)?;
         if status != 0 {
-            Err(FidoErrorKind::CborError(status))?
+            Err(FidoErrorKind::CborError(CborErrorCode::from(status)))?
         }
         let mut decoder = Decoder::new(Config::default(), reader);
         let mut response = ClientPinResponse::default();

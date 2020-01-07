@@ -1,4 +1,6 @@
-use crate::cbor;
+use crate::{
+    cbor, AuthenticatorOptions, PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity,
+};
 use crate::{FidoCredential, FidoDevice, FidoErrorKind, FidoResult};
 use cbor_codec::value::{Bytes, Int, Key, Text, Value};
 use cbor_codec::Encoder;
@@ -31,22 +33,36 @@ pub trait HmacExtension {
         "hmac-secret"
     }
 
+    fn extension_input() -> &'static Value {
+        &Value::Bool(true)
+    }
+
     /// Generates data for the extension field as part of the assertion request
     fn get_dict(&mut self, salt: &[u8; 32], salt2: Option<&[u8; 32]>) -> FidoResult<Value> {
         let mut map = BTreeMap::new();
         map.insert(
-            Key::Text(Text::Text(Self::extension_name().to_owned())),
+            Key::Text(Text::Text(
+                <Self as HmacExtension>::extension_name().to_owned(),
+            )),
             self.get_data(salt, salt2)?,
         );
         Ok(Value::Map(map))
     }
 
-    /// Wraps [`get_dict`]
     fn get_data(&mut self, salt: &[u8; 32], salt2: Option<&[u8; 32]>) -> FidoResult<Value>;
 
     /// Convenience function to create an credential with default rp_id and user_name
     /// Use `FidoDevice::make_credential` if you need more control
     fn make_hmac_credential(&mut self) -> FidoResult<FidoHmacCredential>;
+
+    fn make_hmac_credential_full(
+        &mut self,
+        rp: cbor::PublicKeyCredentialRpEntity,
+        user: cbor::PublicKeyCredentialUserEntity,
+        client_data_hash: &[u8],
+        exclude_list: &[cbor::PublicKeyCredentialDescriptor],
+        options: Option<cbor::AuthenticatorOptions>,
+    ) -> FidoResult<FidoCredential>;
 
     /// Request an assertion from the authenticator for a given credential and salt(s).
     /// at least one `salt` must be provided, consider using a hashing function like SHA256
@@ -63,6 +79,7 @@ pub trait HmacExtension {
         credential: &FidoHmacCredential,
         salt: &[u8; 32],
         salt2: Option<&[u8; 32]>,
+        options: Option<AuthenticatorOptions>,
     ) -> FidoResult<([u8; 32], Option<[u8; 32]>)>;
 
     /// Convenience function for `get_hmac_assertion` that will accept arbitrary
@@ -76,8 +93,13 @@ pub trait HmacExtension {
         let mut digest = Sha256::new();
         digest.input(input);
         digest.result(&mut salt);
-        self.get_hmac_assertion(credential, &salt, None)
-            .map(|secret| secret.0)
+        self.get_hmac_assertion(
+            credential,
+            &salt,
+            None,
+            Some(AuthenticatorOptions { uv: true, rk: true }),
+        )
+        .map(|secret| secret.0)
     }
 }
 
@@ -135,8 +157,45 @@ impl HmacExtension for FidoDevice {
     }
 
     fn make_hmac_credential(&mut self) -> FidoResult<FidoHmacCredential> {
-        self.make_credential("hmac", &[0u8], "commandline", &[0u8; 32])
+        let rp = PublicKeyCredentialRpEntity {
+            id: "hmac",
+            name: None,
+            icon: None,
+        };
+        let user = PublicKeyCredentialUserEntity {
+            id: &[0u8],
+            name: "commandline",
+            icon: None,
+            display_name: None,
+        };
+        let options = Some(AuthenticatorOptions {
+            uv: true,
+            rk: false,
+        });
+
+        self.make_hmac_credential_full(rp, user, &[0u8; 32], &[], options)
             .map(|cred| cred.into())
+    }
+
+    fn make_hmac_credential_full(
+        &mut self,
+        rp: cbor::PublicKeyCredentialRpEntity,
+        user: cbor::PublicKeyCredentialUserEntity,
+        client_data_hash: &[u8],
+        exclude_list: &[cbor::PublicKeyCredentialDescriptor],
+        options: Option<cbor::AuthenticatorOptions>,
+    ) -> FidoResult<FidoCredential> {
+        self.make_credential_full(
+            rp,
+            user,
+            client_data_hash,
+            exclude_list,
+            &[(
+                <Self as HmacExtension>::extension_name(),
+                <Self as HmacExtension>::extension_input(),
+            )],
+            options,
+        )
     }
 
     fn get_hmac_assertion(
@@ -144,6 +203,7 @@ impl HmacExtension for FidoDevice {
         credential: &FidoHmacCredential,
         salt: &[u8; 32],
         salt2: Option<&[u8; 32]>,
+        options: Option<AuthenticatorOptions>,
     ) -> FidoResult<([u8; 32], Option<[u8; 32]>)> {
         let client_data_hash = [0u8; 32];
         while self.shared_secret.is_none() {
@@ -170,10 +230,7 @@ impl HmacExtension for FidoDevice {
             client_data_hash: &client_data_hash,
             allow_list: &allow_list,
             extensions: &[(<Self as HmacExtension>::extension_name(), &ext_data)],
-            options: Some(cbor::AuthenticatorOptions {
-                rk: false,
-                uv: true,
-            }),
+            options: options,
             pin_auth,
             pin_protocol: pin_auth.and(Some(0x01)),
         };

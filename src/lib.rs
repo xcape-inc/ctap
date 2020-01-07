@@ -64,6 +64,10 @@ use std::io::{Cursor, Write};
 use std::u16;
 use std::u8;
 
+pub use self::cbor::{
+    AuthenticatorOptions, PublicKeyCredentialDescriptor, PublicKeyCredentialRpEntity,
+    PublicKeyCredentialUserEntity,
+};
 pub use self::error::*;
 use self::hid_linux as hid;
 use self::packet::CtapCommand;
@@ -232,16 +236,7 @@ impl FidoDevice {
         user_name: &str,
         client_data_hash: &[u8],
     ) -> FidoResult<FidoCredential> {
-        if self.needs_pin && self.pin_token.is_none() {
-            Err(FidoErrorKind::PinRequired)?
-        }
-        if client_data_hash.len() != 32 {
-            Err(FidoErrorKind::CborEncode)?
-        }
-        let pin_auth = self
-            .pin_token
-            .as_ref()
-            .map(|token| token.auth(&client_data_hash));
+        //TODO: implement all options: https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html#authenticatorMakeCredential
         let rp = cbor::PublicKeyCredentialRpEntity {
             id: rp_id,
             name: None,
@@ -253,21 +248,60 @@ impl FidoDevice {
             icon: None,
             display_name: None,
         };
+
+        let options = Some(AuthenticatorOptions {
+            uv: true,
+            rk: false,
+        });
+        self.make_credential_full(rp, user, client_data_hash, &[], &[], options)
+    }
+
+    /// Request a new credential from the authenticator. The `rp_id` should be
+    /// a stable string used to identify the party for whom the credential is
+    /// created, for convenience it will be returned with the credential.
+    /// `user_id` and `user_name` are not required when requesting attestations
+    /// but they MAY be displayed to the user and MAY be stored on the device
+    /// to be returned with an attestation if the device supports this.
+    /// `client_data_hash` SHOULD be a SHA256 hash of provided `client_data`,
+    /// this is only used to verify the attestation provided by the
+    /// authenticator. When not implementing WebAuthN this can be any random
+    /// 32-byte array.
+    ///
+    /// This method will fail if a PIN is required but the device is not
+    /// unlocked or if the device returns malformed data.
+    pub fn make_credential_full(
+        &mut self,
+        rp: cbor::PublicKeyCredentialRpEntity,
+        user: cbor::PublicKeyCredentialUserEntity,
+        client_data_hash: &[u8],
+        exclude_list: &[cbor::PublicKeyCredentialDescriptor],
+        extensions: &[(&str, &cbor_codec::value::Value)],
+        options: Option<cbor::AuthenticatorOptions>,
+    ) -> FidoResult<FidoCredential> {
+        if self.needs_pin && self.pin_token.is_none() {
+            Err(FidoErrorKind::PinRequired)?
+        }
+        if client_data_hash.len() != 32 {
+            Err(FidoErrorKind::CborEncode)?
+        }
         let pub_key_cred_params = [("public-key", -7)];
+        let pin_auth = self
+            .pin_token
+            .as_ref()
+            .map(|token| token.auth(&client_data_hash));
+        let rp_id = rp.id.to_owned();
         let request = cbor::MakeCredentialRequest {
             client_data_hash,
             rp,
             user,
             pub_key_cred_params: &pub_key_cred_params,
-            exclude_list: Default::default(),
-            extensions: Default::default(),
-            options: Some(cbor::AuthenticatorOptions {
-                rk: false,
-                uv: true,
-            }),
+            exclude_list: exclude_list,
+            extensions: extensions,
+            options: options,
             pin_auth,
             pin_protocol: pin_auth.and(Some(0x01)),
         };
+
         let response = match self.cbor(cbor::Request::MakeCredential(request))? {
             cbor::Response::MakeCredential(resp) => resp,
             _ => Err(FidoErrorKind::CborDecode)?,
@@ -281,7 +315,7 @@ impl FidoDevice {
         .bytes();
         Ok(FidoCredential {
             id: response.auth_data.attested_credential_data.credential_id,
-            rp_id: String::from(rp_id),
+            rp_id: rp_id,
             public_key: Vec::from(&public_key[..]),
         })
     }
