@@ -145,7 +145,12 @@ impl FidoDevice {
         if !response.versions.iter().any(|ver| ver == "FIDO_2_0") {
             Err(FidoErrorKind::DeviceUnsupported)?
         }
-        if !response.pin_protocols.iter().any(|ver| *ver == 1) {
+        // Require pin protocol version 1, only if pin-protocol is supported at all
+        if !response
+            .pin_protocols
+            .iter()
+            .fold(true, |supported, ver| *ver == 1 && supported)
+        {
             Err(FidoErrorKind::DeviceUnsupported)?
         }
         self.needs_pin = response.options.client_pin == Some(true);
