@@ -12,6 +12,9 @@ use std::fmt::Display;
 
 pub type FidoResult<T> = Result<T, FidoError>;
 
+#[derive(Debug, Copy)]
+pub struct CborErrorCode(u8);
+
 #[derive(Debug)]
 pub struct FidoError(Context<FidoErrorKind>);
 
@@ -97,5 +100,13 @@ impl From<DecodeError> for FidoError {
     #[inline(always)]
     fn from(err: DecodeError) -> FidoError {
         FidoError(err.context(FidoErrorKind::CborDecode))
+    }
+}
+
+impl Display for CborErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        //TODO: format nicely
+        include_str!("cbor_error_codes.csv");
+        Display::fmt(&self.0, f)
     }
 }
