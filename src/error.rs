@@ -119,7 +119,6 @@ impl Display for CborErrorCode {
         let mut row: usize = 0;
         let mut correct_row: bool = false;
         let mut field = [0u8; 1024];
-        let hex = format!("{:x?}", self.0);
         let mut name: Option<String> = None;
         let mut desc: Option<String> = None;
         loop {
@@ -158,12 +157,12 @@ impl Display for CborErrorCode {
                 ReadFieldResult::End => break,
             }
         }
-        if let Some((code, name, desc)) =
+        if let Some((code, _name, desc)) =
             name.and_then(|name| desc.map(|desc| (self.0, name, desc)))
         {
-            write!(f, "CborError: 0x{:x?}: {}", code, desc);
+            write!(f, "CborError: 0x{:x?}: {}", code, desc)?;
         } else {
-            write!(f, "CborError: 0x{:x?}", self.0);
+            write!(f, "CborError: 0x{:x?}", self.0)?;
         }
         Ok(())
     }
