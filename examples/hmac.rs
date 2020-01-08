@@ -10,19 +10,26 @@ use std::io::prelude::*;
 use std::io::stdin;
 use std::io::stdout;
 
+const RP_ID: &str = "ctap_demo";
+
 fn main() -> ctap::FidoResult<()> {
     let mut devices = ctap::get_devices()?;
     let device_info = &mut devices.next().expect("No authenicator found");
     let mut device = ctap::FidoDevice::new(device_info)?;
-    let options = || Some(AuthenticatorOptions { uv: true, rk: true });
+    let options = || {
+        Some(AuthenticatorOptions {
+            uv: false,
+            rk: true,
+        })
+    };
     let mut credential = match args().skip(1).next().map(|h| FidoHmacCredential {
         id: hex::decode(&h).expect("Invalid credential"),
-        rp_id: "ctap_demo".into(),
+        rp_id: RP_ID.into(),
     }) {
         Some(cred) => cred,
         _ => {
             let rp = PublicKeyCredentialRpEntity {
-                id: "ctap_demo",
+                id: RP_ID,
                 name: Some("ctap_hmac crate"),
                 icon: None,
             };
@@ -55,7 +62,12 @@ fn main() -> ctap::FidoResult<()> {
     digest.input(&message.as_bytes());
     digest.result(&mut salt);
     let hash = device
-        .get_hmac_assertion(&credential, &salt, None, options())?
+        .get_hmac_assertion(
+            &credential,
+            &salt,
+            None,
+            None,
+        )?
         .0;
     println!("Hash: {}", hex::encode(&hash));
     Ok(())
