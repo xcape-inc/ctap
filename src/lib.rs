@@ -333,6 +333,14 @@ impl FidoDevice {
         credential: &FidoCredential,
         client_data_hash: &[u8],
     ) -> FidoResult<bool> {
+        self.get_assertion_multiple(&[credential], client_data_hash)
+    }
+
+    pub fn get_assertion_multiple(
+        &mut self,
+        credentials: &[&FidoCredential],
+        client_data_hash: &[u8],
+    ) -> FidoResult<bool> {
         if self.needs_pin && self.pin_token.is_none() {
             Err(FidoErrorKind::PinRequired)?
         }
@@ -343,12 +351,15 @@ impl FidoDevice {
             .pin_token
             .as_ref()
             .map(|token| token.auth(&client_data_hash));
-        let allow_list = [cbor::PublicKeyCredentialDescriptor {
-            cred_type: String::from("public-key"),
-            id: credential.id.clone(),
-        }];
+        let allow_list = credentials
+            .iter()
+            .map(|cred| cbor::PublicKeyCredentialDescriptor {
+                cred_type: String::from("public-key"),
+                id: cred.id.clone(),
+            })
+            .collect::<Vec<_>>();
         let request = cbor::GetAssertionRequest {
-            rp_id: &credential.rp_id,
+            rp_id: &credentials[0].rp_id,
             client_data_hash: client_data_hash,
             allow_list: &allow_list,
             extensions: Default::default(),
@@ -363,12 +374,26 @@ impl FidoDevice {
             cbor::Response::GetAssertion(resp) => resp,
             _ => Err(FidoErrorKind::CborDecode)?,
         };
-        Ok(crypto::verify_signature(
-            &credential.public_key,
-            &client_data_hash,
-            &response.auth_data_bytes,
-            &response.signature,
-        ))
+        Ok(credentials
+            .iter()
+            .filter(|cred| {
+                response
+                    .credential
+                    .as_ref()
+                    .map(|cred2| cred2.id == cred.id)
+                    .unwrap_or(true)
+            })
+            .map(|cred| {
+                crypto::verify_signature(
+                    &cred.public_key,
+                    &client_data_hash,
+                    &response.auth_data_bytes,
+                    &response.signature,
+                )
+            })
+            .filter(|pass| *pass)
+            .next()
+            .unwrap_or(false))
     }
 
     fn cbor(&mut self, request: cbor::Request) -> FidoResult<cbor::Response> {
