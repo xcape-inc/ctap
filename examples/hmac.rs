@@ -2,8 +2,8 @@ extern crate ctap_hmac as ctap;
 
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
-use ctap::extensions::hmac::{FidoHmacCredential, HmacExtension};
-use ctap_hmac::{AuthenticatorOptions, PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+use ctap::extensions::hmac::HmacExtension;
+use ctap::{FidoCredential, FidoCredentialRequestBuilder, AuthenticatorOptions};
 use hex;
 use std::env::args;
 use std::io::prelude::*;
@@ -14,38 +14,21 @@ const RP_ID: &str = "ctap_demo";
 
 fn main() -> ctap::FidoResult<()> {
     let mut devices = ctap::get_devices()?;
-    let device_info = &mut devices.next().expect("No authenicator found");
+    let device_info = &mut devices.next().expect("No authenticator found");
     let mut device = ctap::FidoDevice::new(device_info)?;
-    let options = || {
-        Some(AuthenticatorOptions {
-            uv: false,
-            rk: true,
-        })
-    };
-    let mut credential = match args().skip(1).next().map(|h| FidoHmacCredential {
+
+    let mut credential = match args().skip(1).next().map(|h| FidoCredential {
         id: hex::decode(&h).expect("Invalid credential"),
-        rp_id: RP_ID.into(),
+        public_key: None,
     }) {
         Some(cred) => cred,
         _ => {
-            let rp = PublicKeyCredentialRpEntity {
-                id: RP_ID,
-                name: Some("ctap_hmac crate"),
-                icon: None,
-            };
-            let user = PublicKeyCredentialUserEntity {
-                id: &[0u8],
-                name: "commandline",
-                icon: None,
-                display_name: None,
-            };
+            let req = FidoCredentialRequestBuilder::default().rp_id(RP_ID).rp_name("ctap_hmac crate").user_name("example").uv(false).build().unwrap();
 
             println!("Authorize using your device");
-            let credential: FidoHmacCredential = device
-                .make_hmac_credential_full(rp, user, &[0u8; 32], &[], options())
-                .map(|cred| cred.into())?;
-            println!("Credential: {}\nNote: You can pass this credential as first argument in order to reproduce results", hex::encode(&credential.id));
-            credential
+            let cred = device.make_hmac_credential(req).expect("Failed to request credential");
+            println!("Credential: {}\nNote: You can pass this credential as first argument in order to reproduce results", hex::encode(&cred.id));
+            cred
         }
     };
     let credential = credential;
@@ -61,14 +44,7 @@ fn main() -> ctap::FidoResult<()> {
     let mut digest = Sha256::new();
     digest.input(&message.as_bytes());
     digest.result(&mut salt);
-    let hash = device
-        .get_hmac_assertion(
-            &credential,
-            &salt,
-            None,
-            None,
-        )?
-        .0;
-    println!("Hash: {}", hex::encode(&hash));
+    let (cred, (hash1, _hash2)) = device.get_hmac_assertion(RP_ID, &[&credential], &salt, None, None)?;
+    println!("Hash: {}", hex::encode(&hash1));
     Ok(())
 }

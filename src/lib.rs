@@ -9,29 +9,31 @@
 //! # Example
 //!
 //! ```
-//! # fn do_fido() -> ctap::FidoResult<()> {
-//! let mut devices = ctap::get_devices()?;
-//! let device_info = &devices.next().unwrap();
-//! let mut device = ctap::FidoDevice::new(device_info)?;
+//! # use ctap_hmac::*;
+//! # fn do_fido() -> FidoResult<()> {
 //!
-//! // This can be omitted if the FIDO device is not configured with a PIN.
-//! let pin = "test";
-//! device.unlock(pin)?;
+//!use ctap_hmac::*;
+//!let device_info = get_devices()?.next().expect("no device connected");
+//!let mut device = FidoDevice::new(&device_info)?;
 //!
-//! // In a real application these values would come from the requesting app.
-//! let rp_id = "rp_id";
-//! let user_id = [0];
-//! let user_name = "user_name";
-//! let client_data_hash = [0; 32];
-//! let cred = device.make_credential(
-//!     rp_id,
-//!     &user_id,
-//!     user_name,
-//!     &client_data_hash
-//! )?;
+//!// This can be omitted if the FIDO device is not configured with a PIN.
+//!let pin = "test";
+//!device.unlock(pin)?;
 //!
-//! // In a real application the credential would be stored and used later.
-//! let result = device.get_assertion(&cred, &client_data_hash);
+//!// In a real application these values would come from the requesting app.
+//!let cred_request = FidoCredentialRequestBuilder::default()
+//!     .rp_id("rp_id")
+//!     .user_name("user_name")
+//!     .build().unwrap();
+//!let cred = device.make_credential(&cred_request)?;
+//!let cred = &&cred;
+//!let assertion_request = FidoAssertionRequestBuilder::default()
+//!     .rp_id("rp_id")
+//!     .credential(cred)
+//!     .build().unwrap();
+//!// In a real application the credential would be stored and used later.
+//!let result = device.get_assertion(&assertion_request);
+//!
 //! # Ok(())
 //! # }
 
@@ -43,6 +45,8 @@ extern crate rand;
 extern crate failure_derive;
 #[macro_use]
 extern crate num_derive;
+#[macro_use]
+extern crate derive_builder;
 extern crate byteorder;
 extern crate cbor as cbor_codec;
 extern crate crypto as rust_crypto;
@@ -64,16 +68,18 @@ use std::io::{Cursor, Write};
 use std::u16;
 use std::u8;
 
-pub use self::cbor::{
-    AuthenticatorOptions, PublicKeyCredentialDescriptor, PublicKeyCredentialRpEntity,
-    PublicKeyCredentialUserEntity,
+use self::cbor::{
+    PublicKeyCredentialDescriptor,
 };
 pub use self::error::*;
+pub use self::cbor::AuthenticatorOptions;
 use self::hid_linux as hid;
 use self::packet::CtapCommand;
+use crate::cbor::{AuthenticatorData, GetAssertionRequest};
 use failure::{Fail, ResultExt};
 use num_traits::FromPrimitive;
 use rand::prelude::*;
+use std::collections::BTreeMap;
 
 static BROADCAST_CID: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 
@@ -86,14 +92,12 @@ pub fn get_devices() -> FidoResult<impl Iterator<Item = hid::DeviceInfo>> {
 }
 
 /// A credential created by a FIDO2 authenticator.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FidoCredential {
     /// The ID provided by the authenticator.
     pub id: Vec<u8>,
     /// The public key provided by the authenticator, in uncompressed form.
-    pub public_key: Vec<u8>,
-    /// The Relying Party ID provided by the platform when this key was generated.
-    pub rp_id: String,
+    pub public_key: Option<Vec<u8>>,
 }
 
 /// An opened FIDO authenticator.
@@ -105,6 +109,110 @@ pub struct FidoDevice {
     shared_secret: Option<crypto::SharedSecret>,
     pin_token: Option<crypto::PinToken>,
     aaguid: [u8; 16],
+}
+
+/// Request a new credential from the authenticator. The `rp_id` should be
+/// a stable string used to identify the party for whom the credential is
+/// created, for convenience it will be returned with the credential.
+/// `user_id` and `user_name` are not required when requesting attestations
+/// but they MAY be displayed to the user and MAY be stored on the device
+/// to be returned with an attestation if the device supports this.
+/// `client_data_hash` SHOULD be a SHA256 hash of provided `client_data`,
+/// this is only used to verify the attestation provided by the
+/// authenticator. When not implementing WebAuthN this can be any random
+/// 32-byte array.
+///
+/// This method will fail if a PIN is required but the device is not
+/// unlocked or if the device returns malformed data.
+#[derive(Clone, Debug, Builder)]
+#[builder(setter(into))]
+#[builder(pattern = "owned")]
+pub struct FidoCredentialRequest<'a> {
+    /// create resident key
+    #[builder(default)]
+    rk: bool,
+    /// user verification
+    #[builder(default)]
+    uv: bool,
+    /// relying party id
+    rp_id: &'a str,
+    /// relying party id
+    #[builder(default)]
+    rp_name: Option<&'a str>,
+    /// relying party icon url
+    #[builder(default)]
+    rp_icon_url: Option<&'a str>,
+    /// user id
+    #[builder(default = "&[0u8]")]
+    user_id: &'a [u8],
+    /// user name
+    #[builder(default)]
+    user_name: Option<&'a str>,
+    /// user icon url
+    #[builder(default)]
+    user_icon_url: Option<&'a str>,
+    /// user display name
+    #[builder(default)]
+    user_display_name: Option<&'a str>,
+    #[builder(default = "&[]")]
+    exclude_list: &'a [&'a FidoCredential],
+    #[builder(default = "&[0u8; 32]")]
+    client_data_hash: &'a [u8],
+    #[builder(default)]
+    extension_data: BTreeMap<&'a str, &'a cbor_codec::value::Value>,
+}
+
+impl<'a> FidoCredentialRequest<'a> {
+    pub fn make_credential(&self, device: &mut FidoDevice) -> FidoResult<FidoCredential> {
+        device.make_credential(&self)
+    }
+}
+
+/// Request an assertion from the authenticator for a given credential.
+/// `client_data_hash` SHOULD be a SHA256 hash of provided `client_data`,
+/// this is signed and verified as part of the attestation. When not
+/// implementing WebAuthN this can be any random 32-byte array.
+///
+/// This method will return whether the assertion matches the credential
+/// provided, and will fail if a PIN is required but not provided or if the
+/// device returns malformed data.
+#[derive(Clone, Debug, Builder)]
+#[builder(setter(into))]
+#[builder(pattern = "owned")]
+pub struct FidoAssertionRequest<'a> {
+    #[builder(default)]
+    up: bool,
+    #[builder(default)]
+    rk: bool,
+    #[builder(default)]
+    uv: bool,
+    /// The Relying Party ID provided by the platform when this key was generated.
+    rp_id: &'a str,
+    credentials: &'a [&'a FidoCredential],
+    #[builder(default = "&[]")]
+    exclude_list: &'a [&'a FidoCredential],
+    #[builder(default = "&[0u8; 32]")]
+    client_data_hash: &'a [u8],
+    #[builder(default)]
+    extension_data: BTreeMap<&'a str, &'a cbor_codec::value::Value>,
+}
+
+impl<'a> FidoAssertionRequest<'a> {
+    pub fn get_assertion(
+        &self,
+        device: &mut FidoDevice,
+    ) -> FidoResult<&'a FidoCredential> {
+        device
+            .get_assertion(self)
+            .map(|res| res.0)
+    }
+}
+
+impl<'a> FidoAssertionRequestBuilder<'a> {
+    pub fn credential(mut self, credential: &'a &'a FidoCredential) -> Self {
+        self.credentials = Some(std::slice::from_ref(credential));
+        self
+    }
 }
 
 impl FidoDevice {
@@ -216,88 +324,56 @@ impl FidoDevice {
         }
     }
 
-    /// Request a new credential from the authenticator. The `rp_id` should be
-    /// a stable string used to identify the party for whom the credential is
-    /// created, for convenience it will be returned with the credential.
-    /// `user_id` and `user_name` are not required when requesting attestations
-    /// but they MAY be displayed to the user and MAY be stored on the device
-    /// to be returned with an attestation if the device supports this.
-    /// `client_data_hash` SHOULD be a SHA256 hash of provided `client_data`,
-    /// this is only used to verify the attestation provided by the
-    /// authenticator. When not implementing WebAuthN this can be any random
-    /// 32-byte array.
-    ///
-    /// This method will fail if a PIN is required but the device is not
-    /// unlocked or if the device returns malformed data.
+
     pub fn make_credential(
         &mut self,
-        rp_id: &str,
-        user_id: &[u8],
-        user_name: &str,
-        client_data_hash: &[u8],
+        request: &FidoCredentialRequest<'_>
     ) -> FidoResult<FidoCredential> {
-        //TODO: implement all options: https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html#authenticatorMakeCredential
         let rp = cbor::PublicKeyCredentialRpEntity {
-            id: rp_id,
-            name: None,
-            icon: None,
+            id: request.rp_id,
+            name: request.rp_name,
+            icon: request.rp_icon_url,
         };
         let user = cbor::PublicKeyCredentialUserEntity {
-            id: user_id,
-            name: user_name,
-            icon: None,
-            display_name: None,
+            id: request.user_id,
+            name: request.user_name.unwrap_or(""),
+            icon: request.user_icon_url,
+            display_name: request.user_display_name,
         };
 
         let options = Some(AuthenticatorOptions {
-            uv: true,
-            rk: false,
+            up: false,
+            uv: request.uv, rk: request.rk
         });
-        self.make_credential_full(rp, user, client_data_hash, &[], &[], options)
-    }
-
-    /// Request a new credential from the authenticator. The `rp_id` should be
-    /// a stable string used to identify the party for whom the credential is
-    /// created, for convenience it will be returned with the credential.
-    /// `user_id` and `user_name` are not required when requesting attestations
-    /// but they MAY be displayed to the user and MAY be stored on the device
-    /// to be returned with an attestation if the device supports this.
-    /// `client_data_hash` SHOULD be a SHA256 hash of provided `client_data`,
-    /// this is only used to verify the attestation provided by the
-    /// authenticator. When not implementing WebAuthN this can be any random
-    /// 32-byte array.
-    ///
-    /// This method will fail if a PIN is required but the device is not
-    /// unlocked or if the device returns malformed data.
-    pub fn make_credential_full(
-        &mut self,
-        rp: cbor::PublicKeyCredentialRpEntity,
-        user: cbor::PublicKeyCredentialUserEntity,
-        client_data_hash: &[u8],
-        exclude_list: &[cbor::PublicKeyCredentialDescriptor],
-        extensions: &[(&str, &cbor_codec::value::Value)],
-        options: Option<cbor::AuthenticatorOptions>,
-    ) -> FidoResult<FidoCredential> {
         if self.needs_pin && self.pin_token.is_none() {
             Err(FidoErrorKind::PinRequired)?
         }
-        if client_data_hash.len() != 32 {
+        if request.client_data_hash.len() != 32 {
             Err(FidoErrorKind::CborEncode)?
+        }
+        while self.shared_secret.is_none() {
+            self.init_shared_secret()?;
         }
         let pub_key_cred_params = [("public-key", -7)];
         let pin_auth = self
             .pin_token
             .as_ref()
-            .map(|token| token.auth(&client_data_hash));
-        let rp_id = rp.id.to_owned();
+            .map(|token| token.auth(&request.client_data_hash));
         let request = cbor::MakeCredentialRequest {
-            client_data_hash,
+            client_data_hash: request.client_data_hash,
             rp,
             user,
             pub_key_cred_params: &pub_key_cred_params,
-            exclude_list: exclude_list,
-            extensions: extensions,
-            options: options,
+            exclude_list: &request.exclude_list.iter()
+                .map(|cred| PublicKeyCredentialDescriptor {
+                    cred_type: "public-key".into(),
+                    id: cred.id.clone(),
+                })
+                .collect::<Vec<_>>()[..],
+            extensions: &request.extension_data.iter()
+                .map(|(name, data)| (*name, *data))
+                .collect::<Vec<_>>()[..],
+            options,
             pin_auth,
             pin_protocol: pin_auth.and(Some(0x01)),
         };
@@ -312,88 +388,98 @@ impl FidoDevice {
                 .attested_credential_data
                 .credential_public_key,
         )?
-        .bytes();
+            .bytes();
         Ok(FidoCredential {
             id: response.auth_data.attested_credential_data.credential_id,
-            rp_id: rp_id,
-            public_key: Vec::from(&public_key[..]),
+            public_key: Some(Vec::from(&public_key[..])),
         })
     }
 
-    /// Request an assertion from the authenticator for a given credential.
+    /// Request a new credential from the authenticator. The `rp_id` should be
+    /// a stable string used to identify the party for whom the credential is
+    /// created, for convenience it will be returned with the credential.
+    /// `user_id` and `user_name` are not required when requesting attestations
+    /// but they MAY be displayed to the user and MAY be stored on the device
+    /// to be returned with an attestation if the device supports this.
     /// `client_data_hash` SHOULD be a SHA256 hash of provided `client_data`,
-    /// this is signed and verified as part of the attestation. When not
-    /// implementing WebAuthN this can be any random 32-byte array.
+    /// this is only used to verify the attestation provided by the
+    /// authenticator. When not implementing WebAuthN this can be any random
+    /// 32-byte array.
     ///
-    /// This method will return whether the assertion matches the credential
-    /// provided, and will fail if a PIN is required but not provided or if the
-    /// device returns malformed data.
-    pub fn get_assertion(
-        &mut self,
-        credential: &FidoCredential,
-        client_data_hash: &[u8],
-    ) -> FidoResult<bool> {
-        self.get_assertion_multiple(&[credential], client_data_hash)
-    }
+    /// This method will fail if a PIN is required but the device is not
+    /// unlocked or if the device returns malformed data.
 
-    pub fn get_assertion_multiple(
+
+    pub fn get_assertion<'a>(
         &mut self,
-        credentials: &[&FidoCredential],
-        client_data_hash: &[u8],
-    ) -> FidoResult<bool> {
+        assertion: &FidoAssertionRequest<'a>,
+    ) -> FidoResult<(&'a FidoCredential, AuthenticatorData)> {
+        while self.shared_secret.is_none() {
+            self.init_shared_secret()?;
+        }
         if self.needs_pin && self.pin_token.is_none() {
             Err(FidoErrorKind::PinRequired)?
         }
-        if client_data_hash.len() != 32 {
+        if assertion.client_data_hash.len() != 32 {
             Err(FidoErrorKind::CborEncode)?
         }
         let pin_auth = self
             .pin_token
             .as_ref()
-            .map(|token| token.auth(&client_data_hash));
-        let allow_list = credentials
-            .iter()
-            .map(|cred| cbor::PublicKeyCredentialDescriptor {
-                cred_type: String::from("public-key"),
-                id: cred.id.clone(),
-            })
-            .collect::<Vec<_>>();
-        let request = cbor::GetAssertionRequest {
-            rp_id: &credentials[0].rp_id,
-            client_data_hash: client_data_hash,
-            allow_list: &allow_list,
-            extensions: Default::default(),
-            options: Some(cbor::AuthenticatorOptions {
-                rk: false,
-                uv: true,
+            .map(|token| token.auth(&assertion.client_data_hash));
+        let request = GetAssertionRequest {
+            rp_id: assertion.rp_id,
+            client_data_hash: assertion.client_data_hash,
+            allow_list: &assertion
+                .credentials
+                .iter()
+                .map(|cred| PublicKeyCredentialDescriptor {
+                    cred_type: "public-key".into(),
+                    id: cred.id.clone(),
+                })
+                .collect::<Vec<_>>()[..],
+            extensions: &assertion
+                .extension_data
+                .iter()
+                .map(|(name, data)| (*name, *data))
+                .collect::<Vec<_>>()[..],
+            options: Some(AuthenticatorOptions {
+                rk: assertion.rk,
+                uv: assertion.uv,
+                up: assertion.up
             }),
-            pin_auth,
+            pin_auth: pin_auth,
             pin_protocol: pin_auth.and(Some(0x01)),
         };
         let response = match self.cbor(cbor::Request::GetAssertion(request))? {
             cbor::Response::GetAssertion(resp) => resp,
             _ => Err(FidoErrorKind::CborDecode)?,
         };
-        Ok(credentials
+        let credential = assertion
+            .credentials
             .iter()
-            .filter(|cred| {
+            .flat_map(|cred| {
                 response
                     .credential
                     .as_ref()
-                    .map(|cred2| cred2.id == cred.id)
-                    .unwrap_or(true)
+                    .filter(|rcred| rcred.id == cred.id)
+                    .map(|_| *cred)
             })
-            .map(|cred| {
-                crypto::verify_signature(
-                    &cred.public_key,
-                    &client_data_hash,
-                    &response.auth_data_bytes,
-                    &response.signature,
-                )
-            })
-            .filter(|pass| *pass)
-            .next()
-            .unwrap_or(false))
+            .next();
+
+        credential.and_then(|cred| {
+            cred.public_key.as_ref().map(|public_key|
+                Some(crypto::verify_signature(
+                            &public_key,
+                            &assertion.client_data_hash,
+                            &response.auth_data_bytes,
+                            &response.signature,
+                        )
+            ).unwrap_or(true)).iter().filter_map( |valid| match valid {
+                true => Some(cred),
+                false => None,
+            }).next()
+        }).ok_or(FidoError::from(FidoErrorKind::VerifySignature)).map(|cred| (cred, response.auth_data))
     }
 
     fn cbor(&mut self, request: cbor::Request) -> FidoResult<cbor::Response> {

@@ -13,28 +13,28 @@ ctap is a library implementing the [FIDO2 CTAP](https://fidoalliance.org/specs/f
 ## Usage example
 
 ```rust
-let devices = ctap::get_devices()?;
-let device_info = &devices[0];
-let mut device = ctap::FidoDevice::new(device_info)?;
+use ctap_hmac::*;
+let device_info = get_devices()?.next().expect("no device connected");
+let mut device = FidoDevice::new(&device_info)?;
 
 // This can be omitted if the FIDO device is not configured with a PIN.
 let pin = "test";
 device.unlock(pin)?;
 
 // In a real application these values would come from the requesting app.
-let rp_id = "rp_id";
-let user_id = [0];
-let user_name = "user_name";
-let client_data_hash = [0; 32];
-let cred = device.make_credential(
-    rp_id,
-    &user_id,
-    user_name,
-    &client_data_hash
-)?;
+let cred_request = FidoCredentialRequestBuilder::default()
+                    .rp_id("rp_id")
+                    .user_name("user_name")
+                    .build().unwrap();
 
+let cred = device.make_credential(&cred_request)?;
+let cred = &&cred;
+let assertion_request = FidoAssertionRequestBuilder::default()
+                            .rp_id("rp_id")
+                            .credential(&&cred)
+                            .build().unwrap();
 // In a real application the credential would be stored and used later.
-let result = device.get_assertion(&cred, &client_data_hash);
+let result = device.get_assertion(&assertion_request);
 ```
 
 ## Limitations
