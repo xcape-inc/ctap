@@ -702,15 +702,16 @@ impl PublicKeyCredentialDescriptor {
 pub struct AuthenticatorOptions {
     pub rk: bool,
     pub uv: bool,
+    pub up: bool,
 }
 
 impl AuthenticatorOptions {
     pub fn encoded(&self) -> bool {
-        self.rk || self.uv
+        self.rk || self.uv || self.up
     }
 
     pub fn encode<W: WriteBytesExt>(&self, encoder: &mut Encoder<W>) -> FidoResult<()> {
-        let length = (self.rk as usize) + (self.uv as usize);
+        let length = (self.rk as usize) + (self.uv as usize) + (self.up as usize);
         encoder.object(length)?;
         if self.rk {
             encoder.text("rk")?;
@@ -718,6 +719,10 @@ impl AuthenticatorOptions {
         }
         if self.uv {
             encoder.text("uv")?;
+            encoder.bool(true)?;
+        }
+        if self.up {
+            encoder.text("up")?;
             encoder.bool(true)?;
         }
         Ok(())

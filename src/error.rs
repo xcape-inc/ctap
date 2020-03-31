@@ -46,6 +46,8 @@ pub enum FidoErrorKind {
     #[fail(display = "Failed to decrypt PIN.")]
     DecryptPin,
     #[fail(display = "Supplied key has incorrect type.")]
+    VerifySignature,
+    #[fail(display = "Failed to verify response signature.")]
     KeyType,
     #[fail(display = "Device returned error: {}", _0)]
     CborError(CborErrorCode),

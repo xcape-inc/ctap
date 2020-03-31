@@ -1,5 +1,6 @@
 use crate::{
-    cbor, AuthenticatorOptions, PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity,
+    AuthenticatorOptions, FidoAssertionRequestBuilder,
+    FidoCredentialRequest,
 };
 use crate::{FidoCredential, FidoDevice, FidoErrorKind, FidoResult};
 use cbor_codec::value::{Bytes, Int, Key, Text, Value};
@@ -12,21 +13,7 @@ use rust_crypto::mac::Mac;
 use rust_crypto::sha2::Sha256;
 use std::collections::BTreeMap;
 use std::io::Cursor;
-
-#[derive(Debug, Clone)]
-pub struct FidoHmacCredential {
-    pub id: Vec<u8>,
-    pub rp_id: String,
-}
-
-impl From<FidoCredential> for FidoHmacCredential {
-    fn from(cred: FidoCredential) -> Self {
-        FidoHmacCredential {
-            id: cred.id,
-            rp_id: cred.rp_id,
-        }
-    }
-}
+use std::iter::FromIterator;
 
 pub trait HmacExtension {
     fn extension_name() -> &'static str {
@@ -51,18 +38,10 @@ pub trait HmacExtension {
 
     fn get_data(&mut self, salt: &[u8; 32], salt2: Option<&[u8; 32]>) -> FidoResult<Value>;
 
-    /// Convenience function to create an credential with default rp_id and user_name
+    /// Convenience function to create an credential which includes extension specific data
     /// Use `FidoDevice::make_credential` if you need more control
-    fn make_hmac_credential(&mut self) -> FidoResult<FidoHmacCredential>;
+    fn make_hmac_credential(&mut self, request: FidoCredentialRequest) -> FidoResult<FidoCredential>;
 
-    fn make_hmac_credential_full(
-        &mut self,
-        rp: cbor::PublicKeyCredentialRpEntity,
-        user: cbor::PublicKeyCredentialUserEntity,
-        client_data_hash: &[u8],
-        exclude_list: &[cbor::PublicKeyCredentialDescriptor],
-        options: Option<cbor::AuthenticatorOptions>,
-    ) -> FidoResult<FidoCredential>;
 
     /// Request an assertion from the authenticator for a given credential and salt(s).
     /// at least one `salt` must be provided, consider using a hashing function like SHA256
@@ -74,19 +53,21 @@ pub trait HmacExtension {
     /// provided, and will fail if a PIN is required but not provided or if the
     /// device returns malformed data.
     ///
-    fn get_hmac_assertion(
+    fn get_hmac_assertion<'a>(
         &mut self,
-        credential: &FidoHmacCredential,
+        rp_id: &str,
+        credentials: &'a [&'a FidoCredential],
         salt: &[u8; 32],
         salt2: Option<&[u8; 32]>,
         options: Option<AuthenticatorOptions>,
-    ) -> FidoResult<([u8; 32], Option<[u8; 32]>)>;
+    ) -> FidoResult<(&'a FidoCredential, ([u8; 32], Option<[u8; 32]>))>;
 
     /// Convenience function for `get_hmac_assertion` that will accept arbitrary
     /// lenght input which will then be hashed and passed on
     fn hmac_challange(
         &mut self,
-        credential: &FidoHmacCredential,
+        rp_id: &str,
+        credential: &FidoCredential,
         input: &[u8],
     ) -> FidoResult<[u8; 32]> {
         let mut salt = [0u8; 32];
@@ -94,12 +75,13 @@ pub trait HmacExtension {
         digest.input(input);
         digest.result(&mut salt);
         self.get_hmac_assertion(
-            credential,
+            rp_id,
+            &[credential],
             &salt,
             None,
-            Some(AuthenticatorOptions { uv: true, rk: true }),
+            Some(AuthenticatorOptions { uv: true, rk: true, up: false }),
         )
-        .map(|secret| secret.0)
+        .map(|(_cred, secret)| secret.0)
     }
 }
 
@@ -156,94 +138,48 @@ impl HmacExtension for FidoDevice {
         Ok(Value::Map(map))
     }
 
-    fn make_hmac_credential(&mut self) -> FidoResult<FidoHmacCredential> {
-        let rp = PublicKeyCredentialRpEntity {
-            id: "hmac",
-            name: None,
-            icon: None,
-        };
-        let user = PublicKeyCredentialUserEntity {
-            id: &[0u8],
-            name: "commandline",
-            icon: None,
-            display_name: None,
-        };
-        let options = Some(AuthenticatorOptions {
-            uv: true,
-            rk: false,
-        });
-
-        self.make_hmac_credential_full(rp, user, &[0u8; 32], &[], options)
-            .map(|cred| cred.into())
+    fn make_hmac_credential(&mut self, request: FidoCredentialRequest) -> FidoResult<FidoCredential> {
+        let mut request = request;
+        request.rk = true;
+        request.extension_data.insert(<Self as HmacExtension>::extension_name(), <Self as HmacExtension>::extension_input());
+        self.make_credential(&request)
     }
 
-    fn make_hmac_credential_full(
+    fn get_hmac_assertion<'a>(
         &mut self,
-        rp: cbor::PublicKeyCredentialRpEntity,
-        user: cbor::PublicKeyCredentialUserEntity,
-        client_data_hash: &[u8],
-        exclude_list: &[cbor::PublicKeyCredentialDescriptor],
-        options: Option<cbor::AuthenticatorOptions>,
-    ) -> FidoResult<FidoCredential> {
-        self.make_credential_full(
-            rp,
-            user,
-            client_data_hash,
-            exclude_list,
-            &[(
-                <Self as HmacExtension>::extension_name(),
-                <Self as HmacExtension>::extension_input(),
-            )],
-            options,
-        )
-    }
-
-    fn get_hmac_assertion(
-        &mut self,
-        credential: &FidoHmacCredential,
+        rp_id: &str,
+        credentials: &'a [&'a FidoCredential],
         salt: &[u8; 32],
         salt2: Option<&[u8; 32]>,
         options: Option<AuthenticatorOptions>,
-    ) -> FidoResult<([u8; 32], Option<[u8; 32]>)> {
-        let client_data_hash = [0u8; 32];
+    ) -> FidoResult<(&'a FidoCredential, ([u8; 32], Option<[u8; 32]>))> {
         while self.shared_secret.is_none() {
             self.init_shared_secret()?;
         }
-        if self.needs_pin && self.pin_token.is_none() {
-            Err(FidoErrorKind::PinRequired)?
+        let ext_data: Value = self.get_data(salt, salt2)?;
+
+        let ext_data: BTreeMap<&str, &Value> = BTreeMap::from_iter(
+            [(<Self as HmacExtension>::extension_name(), &ext_data)]
+                .iter()
+                .cloned(),
+        );
+
+        let mut builder = FidoAssertionRequestBuilder::default()
+            .credentials(credentials)
+            .rp_id(rp_id)
+            .extension_data(ext_data);
+
+        if let Some(opts) = options {
+            builder = builder.uv(opts.uv).up(opts.up);
         }
 
-        if client_data_hash.len() != 32 {
-            Err(FidoErrorKind::CborEncode)?
-        }
-        let pin_auth = self
-            .pin_token
-            .as_ref()
-            .map(|token| token.auth(&client_data_hash));
-        let ext_data: Value = self.get_data(salt, salt2)?;
-        let allow_list = [cbor::PublicKeyCredentialDescriptor {
-            cred_type: String::from("public-key"),
-            id: credential.id.clone(),
-        }];
-        let request = cbor::GetAssertionRequest {
-            rp_id: &credential.rp_id,
-            client_data_hash: &client_data_hash,
-            allow_list: &allow_list,
-            extensions: &[(<Self as HmacExtension>::extension_name(), &ext_data)],
-            options: options,
-            pin_auth,
-            pin_protocol: pin_auth.and(Some(0x01)),
-        };
-        let response = match self.cbor(cbor::Request::GetAssertion(request))? {
-            cbor::Response::GetAssertion(resp) => resp,
-            _ => Err(FidoErrorKind::CborDecode)?,
-        };
+        let (cred, auth_data) =
+            self.get_assertion(&builder.build().unwrap())?;
         let shared_secret = self.shared_secret.as_ref().unwrap();
         let mut decryptor = shared_secret.decryptor();
         let mut hmac_secret_combined = [0u8; 64];
         let _output = RefWriteBuffer::new(&mut hmac_secret_combined);
-        let hmac_secret_enc = match response
-            .auth_data
+        let hmac_secret_enc = match auth_data
             .extensions
             .get(<Self as HmacExtension>::extension_name())
             .ok_or(FidoErrorKind::CborDecode)?
@@ -270,6 +206,7 @@ impl HmacExtension for FidoDevice {
         let mut hmac_secret_1 = [0u8; 32];
         hmac_secret_0.copy_from_slice(&hmac_secret[0..32]);
         hmac_secret_1.copy_from_slice(&hmac_secret[32..]);
-        Ok((hmac_secret_0, salt2.map(|_| hmac_secret_1)))
+        let cred = credentials.into_iter().find(|c| c.id == cred.id).unwrap();
+        Ok((cred, (hmac_secret_0, salt2.and(Some(hmac_secret_1)))))
     }
 }
