@@ -1,9 +1,9 @@
 [package]
 name = "ctap_hmac"
 description = "A Rust implementation of the FIDO2 CTAP protocol, including the HMAC extension"
-version = "0.3.0"
+version = "0.4.0"
 license = "Apache-2.0/MIT"
-homepage = "https://github.com/ArdaXi/ctap/pull/2"
+homepage = "https://github.com/shimunn/ctap"
 repository = "https://github.com/shimunn/ctap"
 authors = ["Arda Xi <arda@ardaxi.com>", "shimun <shimun@shimun.net>"]
 edition = "2018"
@@ -21,6 +21,10 @@ untrusted = "0.6"
 rust-crypto = "0.2"
 csv-core = "0.1.6"
 derive_builder = "0.9.0"
+crossbeam = { version = "0.7.3", optional = true }
 [dev-dependencies]
 crossbeam = "0.7.3"
 hex = "0.4.0"
+
+[features]
+request_multiple = ["crossbeam"]

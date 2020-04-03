@@ -1,7 +1,4 @@
-use crate::{
-    AuthenticatorOptions, FidoAssertionRequestBuilder,
-    FidoCredentialRequest,
-};
+use crate::{FidoAssertionRequest, FidoAssertionRequestBuilder, FidoCredentialRequest};
 use crate::{FidoCredential, FidoDevice, FidoErrorKind, FidoResult};
 use cbor_codec::value::{Bytes, Int, Key, Text, Value};
 use cbor_codec::Encoder;
@@ -13,7 +10,6 @@ use rust_crypto::mac::Mac;
 use rust_crypto::sha2::Sha256;
 use std::collections::BTreeMap;
 use std::io::Cursor;
-use std::iter::FromIterator;
 
 pub trait HmacExtension {
     fn extension_name() -> &'static str {
@@ -40,8 +36,10 @@ pub trait HmacExtension {
 
     /// Convenience function to create an credential which includes extension specific data
     /// Use `FidoDevice::make_credential` if you need more control
-    fn make_hmac_credential(&mut self, request: FidoCredentialRequest) -> FidoResult<FidoCredential>;
-
+    fn make_hmac_credential(
+        &mut self,
+        request: &FidoCredentialRequest,
+    ) -> FidoResult<FidoCredential>;
 
     /// Request an assertion from the authenticator for a given credential and salt(s).
     /// at least one `salt` must be provided, consider using a hashing function like SHA256
@@ -53,13 +51,11 @@ pub trait HmacExtension {
     /// provided, and will fail if a PIN is required but not provided or if the
     /// device returns malformed data.
     ///
-    fn get_hmac_assertion<'a>(
+    fn get_hmac_assertion<'a: 'b, 'b>(
         &mut self,
-        rp_id: &str,
-        credentials: &'a [&'a FidoCredential],
+        assertion: &FidoAssertionRequest<'a, 'b>,
         salt: &[u8; 32],
         salt2: Option<&[u8; 32]>,
-        options: Option<AuthenticatorOptions>,
     ) -> FidoResult<(&'a FidoCredential, ([u8; 32], Option<[u8; 32]>))>;
 
     /// Convenience function for `get_hmac_assertion` that will accept arbitrary
@@ -75,11 +71,13 @@ pub trait HmacExtension {
         digest.input(input);
         digest.result(&mut salt);
         self.get_hmac_assertion(
-            rp_id,
-            &[credential],
+            &FidoAssertionRequestBuilder::default()
+                .rp_id(rp_id)
+                .credential(&credential)
+                .build()
+                .unwrap(),
             &salt,
             None,
-            Some(AuthenticatorOptions { uv: true, rk: true, up: false }),
         )
         .map(|(_cred, secret)| secret.0)
     }
@@ -138,43 +136,35 @@ impl HmacExtension for FidoDevice {
         Ok(Value::Map(map))
     }
 
-    fn make_hmac_credential(&mut self, request: FidoCredentialRequest) -> FidoResult<FidoCredential> {
-        let mut request = request;
+    fn make_hmac_credential(
+        &mut self,
+        request: &FidoCredentialRequest,
+    ) -> FidoResult<FidoCredential> {
+        let mut request = request.clone();
         request.rk = true;
-        request.extension_data.insert(<Self as HmacExtension>::extension_name(), <Self as HmacExtension>::extension_input());
+        request.extension_data.insert(
+            <Self as HmacExtension>::extension_name(),
+            <Self as HmacExtension>::extension_input(),
+        );
         self.make_credential(&request)
     }
 
-    fn get_hmac_assertion<'a>(
+    fn get_hmac_assertion<'a: 'b, 'b>(
         &mut self,
-        rp_id: &str,
-        credentials: &'a [&'a FidoCredential],
+        request: &FidoAssertionRequest<'a, 'b>,
         salt: &[u8; 32],
         salt2: Option<&[u8; 32]>,
-        options: Option<AuthenticatorOptions>,
     ) -> FidoResult<(&'a FidoCredential, ([u8; 32], Option<[u8; 32]>))> {
         while self.shared_secret.is_none() {
             self.init_shared_secret()?;
         }
         let ext_data: Value = self.get_data(salt, salt2)?;
+        let mut request = request.clone();
+        request
+            .extension_data
+            .insert(<Self as HmacExtension>::extension_name(), &ext_data);
 
-        let ext_data: BTreeMap<&str, &Value> = BTreeMap::from_iter(
-            [(<Self as HmacExtension>::extension_name(), &ext_data)]
-                .iter()
-                .cloned(),
-        );
-
-        let mut builder = FidoAssertionRequestBuilder::default()
-            .credentials(credentials)
-            .rp_id(rp_id)
-            .extension_data(ext_data);
-
-        if let Some(opts) = options {
-            builder = builder.uv(opts.uv).up(opts.up);
-        }
-
-        let (cred, auth_data) =
-            self.get_assertion(&builder.build().unwrap())?;
+        let (cred, auth_data) = self.get_assertion(&request)?;
         let shared_secret = self.shared_secret.as_ref().unwrap();
         let mut decryptor = shared_secret.decryptor();
         let mut hmac_secret_combined = [0u8; 64];
@@ -206,7 +196,11 @@ impl HmacExtension for FidoDevice {
         let mut hmac_secret_1 = [0u8; 32];
         hmac_secret_0.copy_from_slice(&hmac_secret[0..32]);
         hmac_secret_1.copy_from_slice(&hmac_secret[32..]);
-        let cred = credentials.into_iter().find(|c| c.id == cred.id).unwrap();
+        let cred = request
+            .credentials
+            .into_iter()
+            .find(|c| c.id == cred.id)
+            .unwrap();
         Ok((cred, (hmac_secret_0, salt2.and(Some(hmac_secret_1)))))
     }
 }

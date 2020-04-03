@@ -61,6 +61,7 @@ pub mod extensions;
 mod hid_common;
 mod hid_linux;
 mod packet;
+mod util;
 
 use std::cmp;
 use std::fs;
@@ -68,13 +69,11 @@ use std::io::{Cursor, Write};
 use std::u16;
 use std::u8;
 
-use self::cbor::{
-    PublicKeyCredentialDescriptor,
-};
+use self::cbor::{AuthenticatorOptions, PublicKeyCredentialDescriptor};
 pub use self::error::*;
-pub use self::cbor::AuthenticatorOptions;
 use self::hid_linux as hid;
 use self::packet::CtapCommand;
+pub use self::util::*;
 use crate::cbor::{AuthenticatorData, GetAssertionRequest};
 use failure::{Fail, ResultExt};
 use num_traits::FromPrimitive;
@@ -99,7 +98,6 @@ pub struct FidoCredential {
     /// The public key provided by the authenticator, in uncompressed form.
     pub public_key: Option<Vec<u8>>,
 }
-
 /// An opened FIDO authenticator.
 pub struct FidoDevice {
     device: fs::File,
@@ -109,6 +107,46 @@ pub struct FidoDevice {
     shared_secret: Option<crypto::SharedSecret>,
     pin_token: Option<crypto::PinToken>,
     aaguid: [u8; 16],
+}
+
+pub struct FidoCancelHandle {
+    device: fs::File,
+    packet_size: u16,
+    channel_id: [u8; 4],
+}
+
+impl FidoCancelHandle {
+    pub fn cancel(&mut self) -> FidoResult<()> {
+        let payload = &[1u8];
+        let to_send = payload.len() as u16;
+        let max_payload = (self.packet_size - 7) as usize;
+        let (frame, payload) = payload.split_at(cmp::min(payload.len(), max_payload));
+        packet::write_init_packet(
+            &mut self.device,
+            64,
+            &self.channel_id,
+            &CtapCommand::Cancel,
+            to_send,
+            frame,
+        )?;
+        if payload.is_empty() {
+            return Ok(());
+        }
+        let max_payload = (self.packet_size - 5) as usize;
+        for (seq, frame) in (0..u8::MAX).zip(payload.chunks(max_payload)) {
+            packet::write_cont_packet(&mut self.device, 64, &self.channel_id, seq, frame)?;
+        }
+        self.device.flush().context(FidoErrorKind::WritePacket)?;
+        Ok(())
+    }
+
+    pub fn cancel_after<T>(&mut self, body: impl Fn(()) -> T) -> FidoResult<T> {
+        let res = body(());
+        match self.cancel() {
+            Ok(_) => Ok(res),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// Request a new credential from the authenticator. The `rp_id` should be
@@ -179,7 +217,7 @@ impl<'a> FidoCredentialRequest<'a> {
 #[derive(Clone, Debug, Builder)]
 #[builder(setter(into))]
 #[builder(pattern = "owned")]
-pub struct FidoAssertionRequest<'a> {
+pub struct FidoAssertionRequest<'a, 'b> {
     #[builder(default)]
     up: bool,
     #[builder(default)]
@@ -194,21 +232,16 @@ pub struct FidoAssertionRequest<'a> {
     #[builder(default = "&[0u8; 32]")]
     client_data_hash: &'a [u8],
     #[builder(default)]
-    extension_data: BTreeMap<&'a str, &'a cbor_codec::value::Value>,
+    extension_data: BTreeMap<&'b str, &'b cbor_codec::value::Value>,
 }
 
-impl<'a> FidoAssertionRequest<'a> {
-    pub fn get_assertion(
-        &self,
-        device: &mut FidoDevice,
-    ) -> FidoResult<&'a FidoCredential> {
-        device
-            .get_assertion(self)
-            .map(|res| res.0)
+impl<'a, 'b> FidoAssertionRequest<'a, 'b> {
+    pub fn get_assertion(&self, device: &mut FidoDevice) -> FidoResult<&'a FidoCredential> {
+        device.get_assertion(self).map(|res| res.0)
     }
 }
 
-impl<'a> FidoAssertionRequestBuilder<'a> {
+impl<'a, 'b> FidoAssertionRequestBuilder<'a, 'b> {
     pub fn credential(mut self, credential: &'a &'a FidoCredential) -> Self {
         self.credentials = Some(std::slice::from_ref(credential));
         self
@@ -324,10 +357,21 @@ impl FidoDevice {
         }
     }
 
+    pub fn cancel_handle(&mut self) -> FidoResult<FidoCancelHandle> {
+        Ok(self
+            .device
+            .try_clone()
+            .map(|device| FidoCancelHandle {
+                device,
+                packet_size: self.packet_size,
+                channel_id: self.channel_id,
+            })
+            .context(FidoErrorKind::Io)?)
+    }
 
     pub fn make_credential(
         &mut self,
-        request: &FidoCredentialRequest<'_>
+        request: &FidoCredentialRequest<'_>,
     ) -> FidoResult<FidoCredential> {
         let rp = cbor::PublicKeyCredentialRpEntity {
             id: request.rp_id,
@@ -343,7 +387,8 @@ impl FidoDevice {
 
         let options = Some(AuthenticatorOptions {
             up: false,
-            uv: request.uv, rk: request.rk
+            uv: request.uv,
+            rk: request.rk,
         });
         if self.needs_pin && self.pin_token.is_none() {
             Err(FidoErrorKind::PinRequired)?
@@ -364,13 +409,17 @@ impl FidoDevice {
             rp,
             user,
             pub_key_cred_params: &pub_key_cred_params,
-            exclude_list: &request.exclude_list.iter()
+            exclude_list: &request
+                .exclude_list
+                .iter()
                 .map(|cred| PublicKeyCredentialDescriptor {
                     cred_type: "public-key".into(),
                     id: cred.id.clone(),
                 })
                 .collect::<Vec<_>>()[..],
-            extensions: &request.extension_data.iter()
+            extensions: &request
+                .extension_data
+                .iter()
                 .map(|(name, data)| (*name, *data))
                 .collect::<Vec<_>>()[..],
             options,
@@ -388,7 +437,7 @@ impl FidoDevice {
                 .attested_credential_data
                 .credential_public_key,
         )?
-            .bytes();
+        .bytes();
         Ok(FidoCredential {
             id: response.auth_data.attested_credential_data.credential_id,
             public_key: Some(Vec::from(&public_key[..])),
@@ -408,11 +457,9 @@ impl FidoDevice {
     ///
     /// This method will fail if a PIN is required but the device is not
     /// unlocked or if the device returns malformed data.
-
-
-    pub fn get_assertion<'a>(
+    pub fn get_assertion<'a, 'b>(
         &mut self,
-        assertion: &FidoAssertionRequest<'a>,
+        assertion: &FidoAssertionRequest<'a, 'b>,
     ) -> FidoResult<(&'a FidoCredential, AuthenticatorData)> {
         while self.shared_secret.is_none() {
             self.init_shared_secret()?;
@@ -446,7 +493,7 @@ impl FidoDevice {
             options: Some(AuthenticatorOptions {
                 rk: assertion.rk,
                 uv: assertion.uv,
-                up: assertion.up
+                up: assertion.up,
             }),
             pin_auth: pin_auth,
             pin_protocol: pin_auth.and(Some(0x01)),
@@ -467,19 +514,28 @@ impl FidoDevice {
             })
             .next();
 
-        credential.and_then(|cred| {
-            cred.public_key.as_ref().map(|public_key|
-                Some(crypto::verify_signature(
+        credential
+            .and_then(|cred| {
+                if cred
+                    .public_key
+                    .as_ref()
+                    .map(|public_key| {
+                        crypto::verify_signature(
                             &public_key,
                             &assertion.client_data_hash,
                             &response.auth_data_bytes,
                             &response.signature,
                         )
-            ).unwrap_or(true)).iter().filter_map( |valid| match valid {
-                true => Some(cred),
-                false => None,
-            }).next()
-        }).ok_or(FidoError::from(FidoErrorKind::VerifySignature)).map(|cred| (cred, response.auth_data))
+                    })
+                    .unwrap_or(true)
+                {
+                    Some(cred)
+                } else {
+                    None
+                }
+            })
+            .ok_or(FidoError::from(FidoErrorKind::VerifySignature))
+            .map(|cred| (cred, response.auth_data))
     }
 
     fn cbor(&mut self, request: cbor::Request) -> FidoResult<cbor::Response> {

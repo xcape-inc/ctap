@@ -45,7 +45,7 @@ pub enum FidoErrorKind {
     EncryptPin,
     #[fail(display = "Failed to decrypt PIN.")]
     DecryptPin,
-    #[fail(display = "Supplied key has incorrect type.")]
+    #[fail(display = "Failed to verify response signature.")]
     VerifySignature,
     #[fail(display = "Failed to verify response signature.")]
     KeyType,
