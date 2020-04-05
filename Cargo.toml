@@ -7,6 +7,7 @@ homepage = "https://github.com/shimunn/ctap"
 repository = "https://github.com/shimunn/ctap"
 authors = ["Arda Xi <arda@ardaxi.com>", "shimun <shimun@shimun.net>"]
 edition = "2018"
+readme = "README.md"
 
 [dependencies]
 rand = "0.6"
