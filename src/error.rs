@@ -23,6 +23,8 @@ pub struct CborErrorCode(u8);
 pub enum FidoErrorKind {
     #[fail(display = "Read/write error with device.")]
     Io,
+    #[fail(display = "Operation timed out")]
+    Timeout,
     #[fail(display = "Error while reading packet from device.")]
     ReadPacket,
     #[fail(display = "Error while writing packet to device.")]

@@ -6,6 +6,7 @@ use ctap::{
 
 use hex;
 use std::env::args;
+use std::time::Duration;
 
 const RP_ID: &str = "ctap_demo";
 
@@ -40,7 +41,8 @@ fn main() -> ctap::FidoResult<()> {
         .map(|handle| FidoDevice::new(&handle))
         .collect::<FidoResult<Vec<_>>>()?;
     // run with --features request_multiple
-    let (cred, _) = ctap::get_assertion_devices(&req, devices.iter_mut())?;
+    let (cred, _) =
+        ctap::get_assertion_devices(&req, devices.iter_mut(), Some(Duration::from_secs(10)))?;
     println!("Success, got assertion for: {}", hex::encode(&cred.id));
     Ok(())
 }
