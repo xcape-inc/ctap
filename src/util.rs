@@ -33,25 +33,23 @@ pub fn request_multiple_devices<
         let interval = Duration::from_millis(10);
         let mut received = 0usize;
         let res = loop {
-            if timeout.map(|t| t < slept).unwrap_or(true) {
-                break if let Some(cause) = err {
-                    cause
-                } else {
-                    Err(FidoErrorKind::Timeout.into())
-                };
+            match timeout {
+                Some(t) if t < slept => {
+                    break if let Some(cause) = err {
+                        cause
+                    } else {
+                        Err(FidoErrorKind::Timeout.into())
+                    };
+                }
+                _ => (),
             }
-            if received == handles.len() {
-                break err.unwrap();
-            }
+            if timeout.map(|t| t < slept).unwrap_or(true) {}
             if let Ok(msg) = rx.recv_timeout(interval) {
                 received += 1;
                 match msg {
-                    e @ Err(_) => {
-                        err = Some(e);
-                    }
-                    res @ Ok(_) => {
-                        break res;
-                    }
+                    e @ Err(_) if received == handles.len() => break e,
+                    e @ Err(_) => err = Some(e),
+                    res @ Ok(_) => break res,
                 }
             } else {
                 slept += interval;
