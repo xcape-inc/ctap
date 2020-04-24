@@ -24,6 +24,7 @@ fn main() -> ctap::FidoResult<()> {
                 FidoDevice::new(&h).and_then(|mut dev| {
                     FidoCredentialRequestBuilder::default()
                         .rp_id(RP_ID)
+                        .user_name("test")
                         .build()
                         .unwrap()
                         .make_credential(&mut dev)
