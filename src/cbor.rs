@@ -597,14 +597,45 @@ impl CoseKey {
         let mut cose_key = CoseKey::default();
         cose_key.algorithm = -7;
         for _ in 0..items {
-            match generic.borrow_mut().i16()? {
-                0x01 => cose_key.key_type = generic.borrow_mut().u16()?,
-                0x02 => cose_key.algorithm = generic.borrow_mut().i32()?,
-                key if key < 0 => {
-                    cose_key.parameters.insert(key, generic.value()?);
+            match generic.value()? {
+                Value::Text(value::Text::Text(text)) => match &text[..] {
+                    "type" => {
+                        cose_key.key_type = match generic.value()? {
+                            Value::Text(value::Text::Text(type_)) if &type_ == "public-key" => 0u16,
+                            Value::U16(i) => i,
+                            Value::U8(i) => i.into(),
+                            _ => {
+                                continue;
+                            }
+                        }
+                    }
+                    "alg" => cose_key.algorithm = generic.borrow_mut().i32()?,
+                    _ => continue,
+                },
+                val @ Value::I8(_)
+                | val @ Value::I16(_)
+                | val @ Value::U16(_)
+                | val @ Value::U8(_) => {
+                    let int_val = match val {
+                        Value::I8(i) => i as i32,
+                        Value::I16(i) => i as i32,
+                        Value::U8(i) => i as i32,
+                        Value::U16(i) => i as i32,
+                        _ => unreachable!(),
+                    };
+                    match int_val {
+                        0x01 => cose_key.key_type = generic.borrow_mut().u16()?,
+                        0x02 => cose_key.algorithm = generic.borrow_mut().i32()?,
+                        key if key < 0 => {
+                            cose_key.parameters.insert(key as i16, generic.value()?);
+                        }
+                        unknown => {
+                            (unknown, generic.value()?); // skip unknown parameter
+                        }
+                    }
                 }
-                _ => {
-                    generic.value()?; // skip unknown parameter
+                unknown => {
+                    (unknown, generic.value()?); // skip unknown parameter
                 }
             }
         }
