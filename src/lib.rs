@@ -325,6 +325,11 @@ impl FidoDevice {
         }
     }
 
+    /// True if this authenticator requires a PIN
+    pub fn needs_pin(&self) -> bool {
+        self.needs_pin
+    }
+
     /// Unlock the device with the provided PIN. Internally this will generate
     /// an ECDH keypair, send the encrypted PIN to the device and store the PIN
     /// token that the device generates on every power cycle. The PIN itself is
