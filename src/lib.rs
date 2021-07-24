@@ -287,14 +287,14 @@ impl FidoDevice {
             cbor::Response::GetInfo(resp) => resp,
             _ => Err(FidoErrorKind::CborDecode)?,
         };
-        if !response.versions.iter().any(|ver| ver == "FIDO_2_0") {
+        if !response.versions.iter().any(|ver| ["FIDO_2_0", "FIDO_2_1_PRE"].contains(&ver.as_str())) {
             Err(FidoErrorKind::DeviceUnsupported)?
         }
         // Require pin protocol version 1, only if pin-protocol is supported at all
         if !response
             .pin_protocols
             .iter()
-            .fold(true, |supported, ver| *ver == 1 && supported)
+            .any(|ver| *ver == 1) && response.pin_protocols.len() > 0
         {
             Err(FidoErrorKind::DeviceUnsupported)?
         }

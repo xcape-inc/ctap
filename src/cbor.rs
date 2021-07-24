@@ -7,6 +7,7 @@
 use cbor_codec::value;
 use cbor_codec::value::Value;
 use cbor_codec::{Config, Decoder, Encoder, GenericDecoder, GenericEncoder};
+use cbor::skip::Skip;
 
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
 use failure::ResultExt;
@@ -38,7 +39,7 @@ impl<'a> Request<'a> {
         }
     }
 
-    pub fn decode<R: ReadBytesExt>(&self, reader: R) -> FidoResult<Response> {
+    pub fn decode<R: ReadBytesExt + Skip>(&self, reader: R) -> FidoResult<Response> {
         Ok(match self {
             Request::MakeCredential(_) => {
                 Response::MakeCredential(MakeCredentialResponse::decode(reader)?)
@@ -277,7 +278,7 @@ pub struct GetInfoResponse {
 }
 
 impl GetInfoResponse {
-    pub fn decode<R: ReadBytesExt>(mut reader: R) -> FidoResult<Self> {
+    pub fn decode<R: ReadBytesExt + Skip>(mut reader: R) -> FidoResult<Self> {
         let status = reader.read_u8().context(FidoErrorKind::CborDecode)?;
         if status != 0 {
             Err(FidoErrorKind::CborError(CborErrorCode::from(status)))?
@@ -304,7 +305,7 @@ impl GetInfoResponse {
                         response.pin_protocols.push(decoder.u8()?);
                     }
                 }
-                _ => continue,
+                _ => decoder.skip()?,
             }
         }
         Ok(response)
