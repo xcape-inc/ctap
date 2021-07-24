@@ -4,10 +4,10 @@
 // http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
+use cbor::skip::Skip;
 use cbor_codec::value;
 use cbor_codec::value::Value;
 use cbor_codec::{Config, Decoder, Encoder, GenericDecoder, GenericEncoder};
-use cbor::skip::Skip;
 
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
 use failure::ResultExt;
@@ -361,7 +361,7 @@ impl<'a> ClientPinRequest<'a> {
 #[derive(Debug, Default)]
 pub struct ClientPinResponse {
     pub key_agreement: Option<CoseKey>,
-    pub pin_token: Option<[u8; 16]>,
+    pub pin_token: Option<Vec<u8>>,
     pub retries: Option<u8>,
 }
 
@@ -381,9 +381,16 @@ impl ClientPinResponse {
                     decoder = generic.into_inner();
                 }
                 0x02 => {
-                    let mut pin_token = [0; 16];
-                    pin_token.copy_from_slice(&decoder.bytes()?[..]);
-                    response.pin_token = Some(pin_token)
+                    response.pin_token = Some(Vec::from(decoder.bytes()?));
+                    // spec: pinUvAuthToken should be a multiple of 16 bytes (AES block length) without any padding or IV
+                    if response
+                        .pin_token
+                        .as_ref()
+                        .map(|token| token.len() % 16 != 0)
+                        == Some(true)
+                    {
+                        Err(FidoErrorKind::CborDecode)?;
+                    }
                 }
                 0x03 => response.retries = Some(decoder.u8()?),
                 _ => continue,
