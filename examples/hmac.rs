@@ -5,7 +5,7 @@ use crypto::sha2::Sha256;
 use ctap::extensions::hmac::HmacExtension;
 use ctap::{FidoAssertionRequestBuilder, FidoCredential, FidoCredentialRequestBuilder};
 use hex;
-use std::env::args;
+use std::env;
 use std::io::prelude::*;
 use std::io::stdin;
 use std::io::stdout;
@@ -16,8 +16,14 @@ fn main() -> ctap::FidoResult<()> {
     let mut devices = ctap::get_devices()?;
     let device_info = &mut devices.next().expect("No authenticator found");
     let mut device = ctap::FidoDevice::new(device_info)?;
+    match env::var("CTAP_PIN") {
+        Ok(ctap_pin) => {
+            device.unlock(&ctap_pin).unwrap()
+        }
+        Err(_) => {}
+    }
 
-    let credential = match args().skip(1).next().map(|h| FidoCredential {
+    let credential = match env::args().skip(1).next().map(|h| FidoCredential {
         id: hex::decode(&h).expect("Invalid credential"),
         public_key: None,
     }) {
