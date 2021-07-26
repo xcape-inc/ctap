@@ -16,7 +16,13 @@ fn main() -> ctap::FidoResult<()> {
     let mut devices = ctap::get_devices()?;
     let device_info = &mut devices.next().expect("No authenticator found");
     let mut device = ctap::FidoDevice::new(device_info)?;
-
+    if device.needs_pin() {
+        print!("FIDO2 PIN: ");
+        stdout().flush().unwrap();
+        let mut pin = String::new();
+        stdin().read_line(&mut pin).expect("Couldn't read your PIN");
+        device.unlock(pin.as_str().trim())?;
+    }
     let credential = match args().skip(1).next().map(|h| FidoCredential {
         id: hex::decode(&h).expect("Invalid credential"),
         public_key: None,
