@@ -86,12 +86,29 @@ impl SharedSecret {
 
     pub fn decrypt_token(&self, data: &mut [u8]) -> FidoResult<PinToken> {
         let mut decryptor = self.decryptor();
+        // pin_token_enc (pinUvAuthToken_enc)
         let mut input = RefReadBuffer::new(data);
-        let mut out_bytes = [0; 16];
+        // pin_token (pinUvAuthToken)
+        let mut out_bytes: Vec<u8>;
+        
+        // According to spec:
+        // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#pinProto1
+        // "pinUvAuthToken, a random, opaque byte string that MUST be either 16 or 32 bytes long. "
+        
+        // Since this is encrypted with AES cbc with no padding, this will be the same size as the 
+        // Using a vector will allow this size to be non-static in case of further changes
+        out_bytes = Vec::with_capacity(data.len());
+        out_bytes.resize(data.len(), 0);
         let mut output = RefWriteBuffer::new(&mut out_bytes);
         decryptor
-            .decrypt(&mut input, &mut output, true)
-            .map_err(|_| FidoErrorKind::DecryptPin)?;
+             .decrypt(&mut input, &mut output, true)
+             .map_err(|_| FidoErrorKind::DecryptPin)?;
+
+        // spec: pinUvAuthToken should be a multiple of 16 bytes (AES block length) without any padding or IV
+        if out_bytes.len() % 16 != 0
+        {
+            Err(FidoErrorKind::DecryptPin)?;
+        }
         Ok(PinToken(hmac::SigningKey::new(&digest::SHA256, &out_bytes)))
     }
 }
