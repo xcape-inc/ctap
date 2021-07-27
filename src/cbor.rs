@@ -283,29 +283,112 @@ impl GetInfoResponse {
         if status != 0 {
             Err(FidoErrorKind::CborError(CborErrorCode::from(status)))?
         }
-        let mut decoder = Decoder::new(Config::default(), reader);
+        let mut generic_decoder = GenericDecoder::new(Config::default(), reader);
         let mut response = GetInfoResponse::default();
-        for _ in 0..decoder.object()? {
-            match decoder.u8()? {
+
+        for _ in 0..generic_decoder.borrow_mut().object()? {
+            match generic_decoder.borrow_mut().u8()? {
+                // Field names and values from here:
+                // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html
+
+                // versions (0x01)	Array of strings	Required	List of supported versions. Supported versions are: "FIDO_2_1" for CTAP2.1 / FIDO2 / Web Authentication authenticators, "FIDO_2_0" for CTAP2.0 / FIDO2 / Web Authentication authenticators, "FIDO_2_1_PRE" for CTAP2.1 Preview features and "U2F_V2" for CTAP1/U2F authenticators.
                 0x01 => {
-                    for _ in 0..decoder.array()? {
-                        response.versions.push(decoder.text()?);
+                    for _ in 0..generic_decoder.borrow_mut().array()? {
+                        response.versions.push(generic_decoder.borrow_mut().text()?);
                     }
                 }
+                // extensions (0x02)	Array of strings	Optional	List of supported extensions.
                 0x02 => {
-                    for _ in 0..decoder.array()? {
-                        response.extensions.push(decoder.text()?);
+                    for _ in 0..generic_decoder.borrow_mut().array()? {
+                        response.extensions.push(generic_decoder.borrow_mut().text()?);
                     }
                 }
-                0x03 => response.aaguid.copy_from_slice(&decoder.bytes()?[..]),
-                0x04 => response.options = OptionsInfo::decode(&mut decoder)?,
-                0x05 => response.max_msg_size = decoder.u16()?,
+                // aaguid (0x03)	Byte String	Required	The claimed AAGUID. 16 bytes in length and encoded the same as MakeCredential AuthenticatorData, as specified in [WebAuthn].
+                0x03 => {
+                    response.aaguid.copy_from_slice(&generic_decoder.borrow_mut().bytes()?[..])
+                }
+                // options (0x04)	Map	Optional	List of supported options.
+                0x04 => {
+                    response.options = OptionsInfo::decode(&mut generic_decoder.borrow_mut())?
+                }
+                // maxMsgSize (0x05)	Unsigned Integer	Optional	Maximum message size supported by the authenticator.
+                0x05 => {
+                    response.max_msg_size = generic_decoder.borrow_mut().u16()?
+                }
+                // pinUvAuthProtocols (0x06)	Array of Unsigned Integers	Optional	List of supported PIN/UV auth protocols in order of decreasing authenticator preference. MUST NOT contain duplicate values nor be empty if present.
                 0x06 => {
-                    for _ in 0..decoder.array()? {
-                        response.pin_protocols.push(decoder.u8()?);
+                    for _ in 0..generic_decoder.borrow_mut().array()? {
+                        response.pin_protocols.push(generic_decoder.borrow_mut().u8()?);
                     }
                 }
-                _ => decoder.skip()?,
+                // maxCredentialCountInList (0x07)	Unsigned Integer	Optional	Maximum number of credentials supported in credentialID list at a time by the authenticator. MUST be greater than zero if present.
+                0x07 => {
+                    let _max_credential_count_in_list = generic_decoder.borrow_mut().u16()?;
+                }
+                // maxCredentialIdLength (0x08)	Unsigned Integer	Optional	Maximum Credential ID Length supported by the authenticator. MUST be greater than zero if present.
+                0x08 => {
+                    let _max_credential_id_length = generic_decoder.borrow_mut().u16()?;
+                }
+                // transports (0x09)	Array of strings	Optional	List of supported transports. Values are taken from the AuthenticatorTransport enum in [WebAuthn]. The list MUST NOT include duplicate values nor be empty if present. Platforms MUST tolerate unknown values.
+                0x09 => {
+                    for _ in 0..generic_decoder.borrow_mut().array()? {
+                        let _cur_transport = generic_decoder.borrow_mut().text()?;
+                    }
+                }
+                // algorithms (0x0A)	Array of PublicKeyCredentialParameters	Optional	List of supported algorithms for credential generation, as specified in [WebAuthn]. The array is ordered from most preferred to least preferred and MUST NOT include duplicate entries nor be empty if present. PublicKeyCredentialParameters' algorithm identifiers are values that SHOULD be registered in the IANA COSE Algorithms registry [IANA-COSE-ALGS-REG].
+                0x0a => {
+                    for _ in 0..generic_decoder.borrow_mut().array()? {
+                        let _junkdata = Some(CoseKey::decode(&mut generic_decoder)?);
+                    }
+                }
+                // maxSerializedLargeBlobArray (0x0B)	Unsigned Integer	Optional	The maximum size, in bytes, of the serialized large-blob array that this authenticator can store. If the authenticatorLargeBlobs command is supported, this MUST be specified. Otherwise it MUST NOT be. If specified, the value MUST be ≥ 1024. Thus, 1024 bytes is the least amount of storage an authenticator must make available for per-credential serialized large-blob arrays if it supports the large, per-credential blobs feature.
+                0x0B => {
+                    let _max_serialized_large_blob_array = generic_decoder.borrow_mut().u16()?;
+                }
+                /* forcePINChange (0x0C)	Boolean	Optional	If this member is:
+
+                                                                present and set to true
+                                                                getPinToken and getPinUvAuthTokenUsingPinWithPermissions will return errors until after a successful PIN Change.
+                                                                
+                                                                present and set to false, or absent.
+                                                                no PIN Change is required.*/
+                0x0C => {
+                    let _force_pin_change = generic_decoder.borrow_mut().bool()?;
+                }
+                /* minPINLength (0x0D)	Unsigned Integer	Optional	This specifies the current minimum PIN length, in Unicode code points, the authenticator enforces for ClientPIN. This is applicable for ClientPIN only: the minPINLength member MUST be absent if the clientPin option ID is absent; it MUST be present if the authenticator supports authenticatorClientPIN.
+                                                                        The default pre-configured minimum PIN length is at least 4 Unicode code points. Authenticators MAY have a pre-configured default minPINLength of more than 4 code points in certain offerings. On reset, minPINLength reverts to its original pre-configured value. Authenticators MAY also have a pre-configured list of RP IDs authorized to receive the current minimum PIN length value via the minPinLength extension. */
+                0x0D => {
+                    let _min_pin_length = generic_decoder.borrow_mut().u16()?;
+                }
+                // firmwareVersion (0x0E)	Unsigned Integer	Optional	Indicates the firmware version of the authenticator model identified by AAGUID. Whenever releasing any code change to the authenticator firmware, authenticator MUST increase the version.
+                0x0e => {
+                    let _firmware_version = generic_decoder.borrow_mut().u32()?;
+                }
+                // maxCredBlobLength (0x0F)	Unsigned Integer	Optional	Maximum credBlob length in bytes supported by the authenticator. Must be present if, and only if, credBlob is included in the supported extensions list. If present, this value MUST be at least 32 bytes.
+                0x0f => {
+                    let _max_cred_blob_length = generic_decoder.borrow_mut().u16()?;
+                }
+
+                /* TODO: Add these.  The rest are not yet implemented for Yubico's libfido, implying that they are not yet in use
+                         https://github.com/Yubico/libfido2/blob/master/src/info.c
+
+                maxRPIDsForSetMinPINLength (0x10)	Unsigned Integer	Optional	This specifies the max number of RP IDs that authenticator can set via setMinPINLength subcommand. This is in addition to pre-configured list authenticator may have. If the authenticator does not support adding additional RP IDs, its value is 0. This MUST ONLY be present if, and only if, the authenticator supports the setMinPINLength subcommand.
+                preferredPlatformUvAttempts (0x11)	Unsigned Integer. (CBOR major type 0)	Optional	This specifies the preferred number of invocations of the getPinUvAuthTokenUsingUvWithPermissions subCommand the platform may attempt before falling back to the getPinUvAuthTokenUsingPinWithPermissions subCommand or displaying an error. MUST be greater than zero. If the value is 1 then all uvRetries are internal and the platform MUST only invoke the getPinUvAuthTokenUsingUvWithPermissions subCommand a single time. If the value is > 1 the authenticator MUST only decrement uvRetries by 1 for each iteration.
+                uvModality (0x12)	Unsigned Integer. (CBOR major type 0)	Optional	This specifies the user verification modality supported by the authenticator via authenticatorClientPIN's getPinUvAuthTokenUsingUvWithPermissions subcommand. This is a hint to help the platform construct user dialogs. The values are defined in [FIDORegistry] Section 3.1 User Verification Methods. Combining multiple bit-flags from the [FIDORegistry] is allowed. If clientPin is supported it MUST NOT be included in the bit-flags, as clientPIN is not a built-in user verification method.
+                certifications (0x13)	Map	Optional	This specifies a list of authenticator certifications.
+                remainingDiscoverableCredentials (0x14)	Unsigned Integer	Optional	
+                If this member is present it indicates the estimated number of additional discoverable credentials that can be stored. If this value is zero then platforms SHOULD create non-discoverable credentials if possible.
+                
+                This estimate SHOULD be based on the assumption that all future discoverable credentials will have maximally-sized fields and SHOULD be zero whenever an attempt to create a discoverable credential may fail due to lack of space, even if it’s possible that some specific request might succeed. For example, a specific request might include fields that are smaller than the maximum possible size and thus succeed, but this value should be zero if a request with maximum-sized fields would fail. Also, a specific request might have an rp.id and user.id that match an existing discoverable credential and thus overwrite it, but this value should be set assuming that will not happen.
+                
+                vendorPrototypeConfigCommands (0x15)	Array of Unsigned Integers	Optional	
+                If present the authenticator supports the authenticatorConfig vendorPrototype subcommand, and its value is a list of authenticatorConfig vendorCommandId values supported, which MAY be empty.
+                */
+
+                // ignore
+                _ => {
+                    generic_decoder.borrow_mut().skip()?
+                }
             }
         }
         Ok(response)
