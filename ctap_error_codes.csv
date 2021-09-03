@@ -8,6 +8,7 @@ Code,Name,Description
 0x06,CTAP1_ERR_CHANNEL_BUSY,Channel busy.
 0x0A,CTAP1_ERR_LOCK_REQUIRED,Command requires channel lock.
 0x0B,CTAP1_ERR_INVALID_CHANNEL,Command not allowed on this cid.
+0x10,CTAP2_ERR_CBOR_PARSING,Error while parsing CBOR
 0x11,CTAP2_ERR_CBOR_UNEXPECTED_TYPE,Invalid/unexpected CBOR error.
 0x12,CTAP2_ERR_INVALID_CBOR,Error when parsing CBOR.
 0x14,CTAP2_ERR_MISSING_PARAMETER,Missing non-optional parameter.

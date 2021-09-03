@@ -27,6 +27,9 @@ fn parse_error_codes() -> Result<()> {
     }
     for result in rdr.deserialize() {
         let record: ErrorCode = result.unwrap();
+        if &record.code == "Code" {
+            continue;
+        }
         out_file.write_all(
             format!(
                 "({}, \"{}\", \"{}\"),\n",
